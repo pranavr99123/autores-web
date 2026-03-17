@@ -234,6 +234,7 @@ input::placeholder{color:var(--text3)}
       </div>
       <button class="action-link" onclick="goAddWatch()">+ Add</button>
     </div>
+    <div id="watchlist-old-jobs"></div>
     <div id="jobs-list"></div>
   </div>
 </div>
@@ -336,7 +337,9 @@ input::placeholder{color:var(--text3)}
 </style>
 
 <script>
-const API = 'https://autores-production.up.railway.app/api';
+// Change this to your home computer IP when running locally
+// or keep the Railway URL for when you're away from home
+const API = localStorage.getItem('autores_api') || 'https://autores-production.up.railway.app/api';
 let token = localStorage.getItem('ar_token');
 let currentUser = JSON.parse(localStorage.getItem('ar_user') || 'null');
 let authMode = 'login';
@@ -469,35 +472,36 @@ async function loadHome() {
   const h = new Date().getHours();
   document.getElementById('greeting').textContent = (h<12?'Good morning':h<17?'Good afternoon':'Good evening') + ', ' + (currentUser?.name?.split(' ')[0] || '');
   try {
-    const [jobs, stats, activity] = await Promise.all([
-      api('GET', '/jobs'),
+    const [watchlist, stats, activity] = await Promise.all([
+      api('GET', '/watchlist'),
       api('GET', '/bookings/stats/summary'),
       api('GET', '/stream/recent?limit=8')
     ]);
-    const active = jobs.filter(j => j.is_active);
-    const watchlist = await api('GET', '/watchlist').catch(()=>[]);
+    const active = watchlist.filter(w => w.is_active);
     document.getElementById('stat-slots').textContent = activity.filter(e=>e.type==='slot_found').length;
     document.getElementById('stat-confirmed').textContent = stats.confirmed || 0;
     document.getElementById('stat-watching').textContent = active.length;
     if (active.length > 0) {
       document.getElementById('live-badge').style.display = 'flex';
-      document.getElementById('live-text').textContent = active.length + ' job' + (active.length>1?'s':'') + ' monitoring';
+      document.getElementById('live-text').textContent = 'Watching ' + active.length + ' restaurant' + (active.length>1?'s':'');
     }
-    // Jobs preview
     const jc = document.getElementById('home-jobs');
     if (active.length === 0) {
-      jc.innerHTML = `<div class="empty"><div class="empty-icon">🎯</div><div class="empty-title">No active jobs</div><div class="empty-sub">Create a job to start monitoring restaurants.</div><button class="btn btn-primary" style="width:auto;padding:12px 24px" onclick="goNewJob()">Start Monitoring</button></div>`;
+      jc.innerHTML = `<div class="empty"><div class="empty-icon">👀</div><div class="empty-title">Not watching anything</div><div class="empty-sub">Add a restaurant and AutoRes checks for open tables every 60 seconds.</div><button class="btn btn-primary" style="width:auto;padding:12px 24px" onclick="goAddWatch()">Watch a Restaurant</button></div>`;
     } else {
-      jc.innerHTML = active.slice(0,3).map(j => `
+      jc.innerHTML = active.slice(0,3).map(w => `
         <div class="card card-tap" onclick="goScreen('jobs')">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
             <div class="dot dot-sage" style="animation:pulse 2s infinite"></div>
-            <div style="font-size:15px;font-weight:600;flex:1">${j.name||j.city}</div>
-            ${j.auto_book?'<span style="font-size:11px;color:var(--ember2)">⚡ Auto</span>':''}
+            <div style="font-size:15px;font-weight:600;flex:1">${w.restaurant_name}</div>
+            ${w.auto_book?'<span style="font-size:11px;color:var(--ember2)">⚡ Auto</span>':''}
           </div>
-          <div style="font-size:13px;color:var(--text2);margin-bottom:8px">Party of ${j.party_size} · ${j.city}</div>
-          <div style="display:flex;gap:6px">${(j.platforms||[]).map(p=>`<span class="ptag ptag-${p}">${p}</span>`).join('')}</div>
-          ${j.active_slots>0?`<div style="background:var(--sageBg);border:0.5px solid var(--sageBorder);border-radius:8px;padding:8px 10px;margin-top:8px;font-size:13px;color:var(--sage2)">${j.active_slots} open slots right now →</div>`:''}
+          <div style="font-size:13px;color:var(--text2);margin-bottom:6px">Party of ${w.party_size} · ${w.date_from?.slice(0,10)} – ${w.date_to?.slice(0,10)}</div>
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span class="ptag ptag-${w.platform}">${w.platform}</span>
+            <span style="font-size:11px;color:var(--text3)">${w.last_checked_at ? 'Checked ' + timeAgo(new Date(w.last_checked_at)) : 'Checking soon...'}</span>
+          </div>
+          ${w.last_slot_found_at?`<div style="background:var(--sageBg);border:0.5px solid var(--sageBorder);border-radius:8px;padding:8px 10px;margin-top:8px;font-size:13px;color:var(--sage2)">Slot found ${timeAgo(new Date(w.last_slot_found_at))} →</div>`:''}
         </div>`).join('');
     }
     // Activity
@@ -524,6 +528,17 @@ async function loadHome() {
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 async function loadJobs() {
   try {
+    // Check for any old-style monitoring jobs and offer to clean them up
+    const oldJobs = await api('GET', '/jobs').catch(() => []);
+    const oldEl = document.getElementById('watchlist-old-jobs');
+    if (oldEl && oldJobs.length > 0) {
+      oldEl.innerHTML = `<div style="margin:0 16px 12px;padding:12px 14px;background:var(--surface2);border-radius:12px;border:0.5px solid var(--border2);display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:13px;color:var(--text2)">${oldJobs.length} old entry${oldJobs.length>1?'ies':''} from previous version</span>
+        <button onclick="clearOldJobs()" style="background:none;border:none;color:var(--ember);font-size:13px;font-weight:600;cursor:pointer">Clear all</button>
+      </div>`;
+    } else if (oldEl) {
+      oldEl.innerHTML = '';
+    }
     const items = await api('GET', '/watchlist');
     const active = items.filter(w=>w.is_active), paused = items.filter(w=>!w.is_active);
     document.getElementById('jobs-sub').textContent = active.length + ' watching · ' + paused.length + ' paused';
@@ -570,6 +585,18 @@ async function toggleWatch(id, active) {
 async function deleteWatch(id) {
   if (!confirm('Stop watching this restaurant?')) return;
   try { await api('DELETE', '/watchlist/'+id); loadJobs(); toast('Removed from watchlist'); } catch(e) { toast('Error','','⚠️'); }
+}
+
+async function clearOldJobs() {
+  if (!confirm('Remove all old entries?')) return;
+  try {
+    const jobs = await api('GET', '/jobs');
+    for (const j of jobs) {
+      await api('DELETE', '/jobs/' + j.id).catch(() => {});
+    }
+    loadJobs();
+    toast('Cleared', 'Old entries removed');
+  } catch(e) { toast('Error','','⚠️'); }
 }
 
 // ─── Wizard ───────────────────────────────────────────────────────────────────
